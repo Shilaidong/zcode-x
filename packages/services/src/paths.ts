@@ -39,9 +39,20 @@ export function getDataBaseDir(): string {
   return defaultDataBaseDir;
 }
 
-/** {dataBaseDir}/.zcode */
+function resolveDefaultZCodeDirName(): string {
+  // 修复依据：当产品身份为 zcode-x 时，数据根目录隔离为 .zcode-x，实现与官方版彻底共存，避免 SQLite 与会话数据互锁
+  if (
+    typeof process !== "undefined" &&
+    (process.env.ZCODE_PRODUCT_FLAVOR === "zcode-x" || process.env.ZCODE_X_IDENTITY === "1")
+  ) {
+    return ".zcode-x";
+  }
+  return ".zcode";
+}
+
+/** {dataBaseDir}/.zcode 或 .zcode-x */
 export function getZCodeDataRootDir(): string {
-  return join(getDataBaseDir(), ".zcode");
+  return join(getDataBaseDir(), resolveDefaultZCodeDirName());
 }
 
 /** 非项目对话共享的真实工作目录；默认 ~/.zcode/workspace/default。 */

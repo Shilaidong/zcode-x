@@ -12,7 +12,6 @@ import { cn } from "../lib/utils.js";
 import { TID_CHAT_REASONING_CONTENT, TID_CHAT_REASONING_TRIGGER } from "@zcode/shared";
 import { BrainIcon, ChevronRightIcon } from "lucide-react";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { QueuedSummaryContent } from "@/ToolCallBlocks/QueuedSummaryContent.js";
 import type { ComponentProps, CSSProperties, ReactNode } from "react";
 import {
   EMPTY_SCROLL_MASK_STATE,
@@ -294,42 +293,12 @@ export const ReasoningTrigger = memo(
     const { intl } = useZCodeIntl();
     const streamingSummary =
       isStreaming && !isOpen ? resolveReasoningStreamingSummary(streamingText) : null;
-    const streamingSummaryRef = useRef<HTMLSpanElement | null>(null);
-    const streamingSummaryTextRef = useRef<HTMLSpanElement | null>(null);
-    const [isStreamingSummaryOverflowing, setIsStreamingSummaryOverflowing] = useState(false);
-
-    useEffect(() => {
-      const viewport = streamingSummaryRef.current;
-      if (!viewport || !streamingSummary) {
-        return;
-      }
-
-      const syncSummaryViewport = () => {
-        setIsStreamingSummaryOverflowing((current) => {
-          const next = isReasoningSummaryOverflowing(viewport);
-          return current === next ? current : next;
-        });
-        // 流式摘要超过可用宽度后，普通 overflow-hidden 会固定显示旧前缀，
-        // 最新 token 被裁在右侧。每次内容增长后把单行视口推到末尾，让旧内容向左移。
-        scrollReasoningSummaryToEnd(viewport);
-      };
-
-      syncSummaryViewport();
-      if (typeof ResizeObserver === "undefined") {
-        return;
-      }
-      const resizeObserver = new ResizeObserver(syncSummaryViewport);
-      resizeObserver.observe(viewport);
-      if (streamingSummaryTextRef.current) {
-        resizeObserver.observe(streamingSummaryTextRef.current);
-      }
-      return () => resizeObserver.disconnect();
-    }, [streamingSummary?.text]);
 
     const thinkingMessage =
       getThinkingMessage?.(isStreaming, duration) ??
       (isStreaming && !isOpen ? (
-        <span className="animated-gradient-text font-medium">
+        // 修复依据：Intel Mac 在文字上运行持续的 background-clip: text 扫光动画（animated-gradient-text）会导致 GPU 占用居高不下；改为纯色静态文本直接展示。
+        <span className="font-medium text-foreground-subtle">
           {intl.formatMessage({ id: "chat.reasoning.thinking" })}
         </span>
       ) : duration === undefined ? (
@@ -370,8 +339,7 @@ export const ReasoningTrigger = memo(
       >
         {children ?? (
           <>
-            {/* thinking 会在长流式回复里持续存在，旋转 loader 会长期占用渲染资源；
-            运行态保留文案扫光，图标固定为静态思考语义。 */}
+            {/* 静态思考语义图标 */}
             <BrainIcon className="size-4 shrink-0 text-foreground-subtlest" />
             {/* 右侧流式摘要是可伸缩内容；如果左侧标签也参与 flex shrink，
                 长摘要会把思考状态标签挤成多行。固定语义标签宽度，只让摘要占剩余空间。 */}
@@ -380,28 +348,13 @@ export const ReasoningTrigger = memo(
             </span>
             {streamingSummary ? <span className="shrink-0 text-foreground-subtlest">·</span> : null}
             {streamingSummary ? (
+              // 修复依据：针对 Intel Mac 核显在高频流式出字时运行滚动动画、CSS mask 遮罩及持续触发 scrollLeft 会引发严重 GPU 占用的问题，直接以原生 CSS truncate 单行纯文本实时出字，彻底移除滚动与遮罩特效。
               <span
-                ref={streamingSummaryRef}
-                className="min-w-0 flex-1 overflow-hidden whitespace-nowrap text-foreground-subtle"
-                data-reasoning-streaming-mask={isStreamingSummaryOverflowing ? "both" : "none"}
+                className="min-w-0 flex-1 truncate text-foreground-subtle"
                 data-reasoning-streaming-line="true"
-                data-reasoning-streaming-roll="true"
-                style={getReasoningSummaryMaskStyle(isStreamingSummaryOverflowing)}
+                data-reasoning-streaming-text="true"
               >
-                <QueuedSummaryContent
-                  contentKey={`reasoning-line:${streamingSummary.key}`}
-                  contentRefreshVersion={streamingSummary.text}
-                  primaryText={
-                    <span
-                      ref={streamingSummaryTextRef}
-                      className="inline-block min-w-max"
-                      data-reasoning-streaming-text="true"
-                    >
-                      {streamingSummary.text}
-                    </span>
-                  }
-                  enabled
-                />
+                {streamingSummary.text}
               </span>
             ) : null}
             <ChevronRightIcon

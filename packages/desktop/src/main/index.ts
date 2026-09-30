@@ -258,6 +258,11 @@ if (!app.isPackaged && process.env.ZCODE_DISABLE_FIXED_REMOTE_DEBUGGING_PORT !==
   app.commandLine.appendSwitch("remote-debugging-port", "9229");
 }
 
+// 修复依据：将编译注入的产品身份同步至 process.env，确保主进程及后续 spawn 衍生的 host/agent 子进程统一使用独立隔离数据目录
+if (ZCODE_PRODUCT_FLAVOR) {
+  process.env.ZCODE_PRODUCT_FLAVOR = ZCODE_PRODUCT_FLAVOR;
+}
+
 app.setName(runtimeApplicationName);
 if (runtimeHomePath) {
   app.setPath("home", runtimeHomePath);
