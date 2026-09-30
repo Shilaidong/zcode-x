@@ -25,7 +25,8 @@ export const DesktopWindowFrame = memo(function DesktopWindowFrameComponent({
   showHeader?: boolean;
 }) {
   const isLinuxDesktop = isDesktop && !isMacDesktop && !isWindowsDesktop;
-  const usesOpaqueRootSurface = !isDesktop || isWindowsDesktop || isLinuxDesktop;
+  // 修复依据：移除 macOS 半透明渲染，所有平台统一使用实体不透明外壳底色，杜绝与系统底层的无意义 GPU 混合与重绘
+  const usesOpaqueRootSurface = true;
 
   return (
     <div
@@ -38,8 +39,7 @@ export const DesktopWindowFrame = memo(function DesktopWindowFrameComponent({
         // 可能短暂丢失 overflow 圆角，额外使用同半径 clip-path 固定合成裁切；最大化时两者一起归零。
         isLinuxDesktop &&
           "rounded-[16px] [clip-path:inset(0_round_16px)] platform-linux-window-maximized:rounded-none platform-linux-window-maximized:[clip-path:inset(0)]",
-        // Web/Windows/Linux 都没有 macOS vibrancy 作为透明底层兜底，
-        // 如果继续走半透明 alt 背景，会和浏览器或系统窗口底色混出异常灰块。
+        // 统一使用实体底色 bg-background-win-alt，避免透明混合
         usesOpaqueRootSurface ? "bg-background-win-alt" : "bg-background-alt",
       )}
       data-desktop-window-frame="true"

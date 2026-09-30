@@ -311,7 +311,8 @@ export function ToastMessageView({
   return (
     <div
       className={cn(
-        "rounded-2xl border bg-toast/60 text-ui-base shadow-lg backdrop-blur-xl transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.77,0,0.175,1)] motion-reduce:transform-none motion-reduce:transition-opacity",
+        // 修复依据：移除 backdrop-blur-xl 离屏高斯模糊，采用实体 bg-toast 背景，提高文字清晰度并消除 GPU 滤镜开销
+        "rounded-2xl border bg-toast text-ui-base shadow-lg transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.77,0,0.175,1)] motion-reduce:transform-none motion-reduce:transition-opacity",
         isUpdate
           ? "origin-bottom-left w-[min(300px,calc(100vw-1rem))] max-w-[min(300px,calc(100vw-1rem))] border-popover-border text-foreground shadow-lg"
           : isNotice

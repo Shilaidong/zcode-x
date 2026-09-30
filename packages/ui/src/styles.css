@@ -43,7 +43,7 @@
 /* 云端模板常用样式的构建保障，不是运行时 class 白名单。 */
 @source inline("text-center text-ui-base/relaxed text-foreground-subtle font-semibold font-normal text-foreground whitespace-nowrap underline decoration-foreground-subtle decoration-dashed underline-offset-4");
 
-/* 磨砂玻璃效果：html/body 需要透明背景，让 Electron vibrancy 透出来 */
+/* 修复依据：移除 html/body 的透明背景，采用系统主题实体背景，杜绝整个网页根节点的无意义 Alpha 通道渲染，大幅减轻 GPU 压力 */
 html,
 body,
 #root {
@@ -51,7 +51,15 @@ body,
   height: 100%;
   min-width: 0;
   min-height: 0;
-  background: transparent !important;
+  background: var(--color-background);
+}
+
+/* 修复依据：在全局环境中禁用 GPU 离屏高斯模糊滤镜（backdrop-filter），消除弹窗、吸顶头部与通知气泡导致的管线停顿与发热 */
+*,
+::before,
+::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 :root {
@@ -156,7 +164,7 @@ body {
   --animated-gradient-text-strong: rgba(10, 10, 10, 1);
   --animated-gradient-text-soft: rgba(10, 10, 10, 0.22);
   --color-background: var(--color-neutral-50);
-  --color-background-alt: color-mix(in oklab, var(--color-neutral-100) 60%, transparent);
+  --color-background-alt: var(--color-neutral-100);
   --color-background-win-alt: var(--color-neutral-200);
   --color-brand: var(--color-sky-400);
   --color-icon-blue: var(--color-terminal-bright-blue);
@@ -309,7 +317,7 @@ body {
   --animated-gradient-text-strong: rgba(255, 255, 255, 1);
   --animated-gradient-text-soft: rgba(255, 255, 255, 0.2);
   --color-background: var(--color-neutral-900);
-  --color-background-alt: color-mix(in oklab, var(--color-neutral-800) 60%, transparent);
+  --color-background-alt: var(--color-neutral-800);
   --color-background-win-alt: var(--color-neutral-800);
   --color-brand: var(--color-sky-500);
   --color-trajectory-user: #60a5fa;
@@ -463,7 +471,7 @@ body {
   --animated-gradient-text-soft: rgba(13, 13, 13, 0.22);
   --color-background: #f8f8f8;
   --color-background-win-alt: #ececee;
-  --color-background-alt: color-mix(in oklab, var(--color-background) 70%, transparent);
+  --color-background-alt: #ececee;
   --color-brand: #000000;
   --color-trajectory-user: #2563eb;
   --color-trajectory-assistant: #0f766e;
@@ -608,7 +616,7 @@ body {
   --animated-gradient-text-soft: rgba(255, 255, 255, 0.22);
   --color-background: #161616;
   --color-background-win-alt: #2b2b2b;
-  --color-background-alt: color-mix(in oklab, var(--color-background-win-alt) 60%, transparent);
+  --color-background-alt: var(--color-background-win-alt);
   --color-brand: #ffffff;
   --color-trajectory-user: #60a5fa;
   --color-trajectory-assistant: #2dd4bf;
@@ -820,50 +828,31 @@ body {
     background-color: #484a58;
   }
 
+  /* 修复依据：Intel Mac 在文字上运行持续的 background-clip: text 扫光动画会导致 GPU 占用居高不下；统一改为纯色静态文本，移除无限循环 keyframe 动画与硬件图层提升 */
   .animated-gradient-text {
     display: inline-block;
-    background: linear-gradient(
-      90deg,
-      var(--animated-gradient-text-strong) 0%,
-      var(--animated-gradient-text-strong) 34%,
-      var(--animated-gradient-text-soft) 50%,
-      var(--animated-gradient-text-strong) 66%,
-      var(--animated-gradient-text-strong) 100%
-    );
-    background-size: 300% 100%;
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    animation: gradient-flow 4s linear infinite;
-    will-change: background-position;
-    transform: translateZ(0);
-    backface-visibility: hidden;
+    color: var(--animated-gradient-text-strong);
+    -webkit-text-fill-color: currentColor;
+    background: none;
+    animation: none;
+    will-change: auto;
+    transform: none;
   }
 
   .animated-gradient-text-subtle {
     --animated-gradient-text-strong: var(--color-foreground-subtle);
+    color: var(--color-foreground-subtle);
+    -webkit-text-fill-color: currentColor;
   }
 
   .cua-group-gradient-text {
     display: inline-block;
-    background: linear-gradient(
-      90deg,
-      var(--animated-gradient-text-strong) 0%,
-      var(--animated-gradient-text-soft) 40%,
-      var(--animated-gradient-text-soft) 60%,
-      var(--animated-gradient-text-strong) 100%
-    );
-    background-size: 200% 100%;
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    animation: cua-group-gradient-flow 1s linear infinite;
-    animation-delay: 0.5s;
-    will-change: background-position;
-    transform: translateZ(0);
-    backface-visibility: hidden;
+    color: var(--animated-gradient-text-strong);
+    -webkit-text-fill-color: currentColor;
+    background: none;
+    animation: none;
+    will-change: auto;
+    transform: none;
   }
 
   @keyframes cua-group-gradient-flow {
@@ -970,21 +959,21 @@ body {
   }
 }
 
+/* 修复依据：移除流式输出过程中的 900ms 缓动动画与 will-change: opacity。
+   避免 Chromium 为每一个实时吐出的文本块与代码段单独分配 GPU 合成图层（RenderLayer），降低显存与复合开销 */
 [data-zcode-stream-animate="true"] {
-  animation: zcode-stream-text-in 900ms cubic-bezier(0.16, 1, 0.3, 1)
-    var(--zcode-stream-animation-delay, 0ms) both;
-  will-change: opacity;
+  animation: none;
+  will-change: auto;
 }
 
 [data-zcode-stream-marker-animate="true"]::marker {
-  animation: zcode-stream-marker-in 900ms cubic-bezier(0.16, 1, 0.3, 1)
-    var(--zcode-stream-animation-delay, 0ms) both;
+  animation: none;
 }
 
 [data-zcode-tool-stream-animate="true"],
 [data-zcode-chat-loading-animate="true"] {
-  animation: zcode-stream-text-in 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
-  will-change: opacity;
+  animation: none;
+  will-change: auto;
 }
 
 /*  Radix Collapsible 在测量 closed 高度时会写入 inline animation-name:none。

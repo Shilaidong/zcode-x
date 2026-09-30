@@ -134,22 +134,23 @@ function isLinuxDesktopWindow() {
 }
 
 function buildDesktopWindowVisualOptions() {
+  const solidBackgroundColor = nativeTheme.shouldUseDarkColors ? "#161616" : "#f8f8f8";
+
   if (process.platform === "darwin") {
+    // 修复依据：移除 macOS vibrancy: "under-window"，使用实体不透明背景色，避免 WindowServer 持续进行桌面像素采样与高斯模糊合成，大幅降低 Intel Mac 核显负荷与发热
     return {
-      backgroundColor: "#00000000",
+      backgroundColor: solidBackgroundColor,
       titleBarStyle: "hidden" as const,
       trafficLightPosition: MACOS_TRAFFIC_LIGHT_BASE_POSITION,
-      vibrancy: "under-window" as const,
-      visualEffectState: "active" as const,
     };
   }
 
   if (process.platform === "win32") {
+    // 修复依据：移除 Windows acrylic 材质，使用纯色实体窗口以降低 GPU 合成负荷
     return {
-      backgroundColor: "#00000000",
+      backgroundColor: solidBackgroundColor,
       // Windows 窗口操作由 renderer 绘制，禁用原生标题栏，避免出现两套按钮。
       frame: false,
-      backgroundMaterial: "acrylic" as const,
     };
   }
 
