@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Zcode-x</string>
+    <string name="loading_title">正在启动 Zcode-x 工作区...</string>
+    <string name="loading_desc">首次打开将自动初始化本地 AI 编程运行时，请稍候</string>
+    <string name="notification_title">Zcode-x 工作区服务</string>
+    <string name="notification_desc">本地 AI 编程助手服务正在运行中</string>
+</resources>

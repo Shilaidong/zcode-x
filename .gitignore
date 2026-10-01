@@ -69,3 +69,11 @@ packages/desktop/.e2e-artifacts/
 packages/desktop/.e2e-cache/
 packages/desktop/.e2e-network-capture/
 .zcode-runtime/
+
+# Android 构建产物与 Gradle 缓存
+packages/android/.gradle/
+packages/android/build/
+packages/android/app/build/
+packages/android/app/src/main/assets/zcode-runtime.tar.gz
+dist/android/
+
