@@ -180,6 +180,7 @@ async function serve(options) {
     env: {
       ...process.env,
       PORT: String(port),
+      ZCODE_PRODUCT_FLAVOR: process.env.ZCODE_PRODUCT_FLAVOR || "zcode-x",
       ZCODE_AGENT_SERVER_ARGS_JSON: JSON.stringify([agentEntry, "app-server", "--stdio"]),
       ZCODE_AGENT_SERVER_COMMAND: process.execPath,
       ZCODE_SERVER_HOST: options.host,
@@ -209,7 +210,7 @@ async function serve(options) {
   });
 
   console.log("");
-  console.log("ZCode Web is running");
+  console.log("Zcode-x Web is running");
   console.log(`Local:   ${localUrl}`);
   if (options.host === "0.0.0.0" || options.host === "::") {
     for (const url of networkUrls(port, token)) {
