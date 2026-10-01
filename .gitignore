@@ -74,6 +74,7 @@ packages/desktop/.e2e-network-capture/
 packages/android/.gradle/
 packages/android/build/
 packages/android/app/build/
-packages/android/app/src/main/assets/zcode-runtime.tar.gz
+packages/android/app/src/main/assets/zcode-runtime*
+packages/android/app/src/main/jniLibs/
 dist/android/
 

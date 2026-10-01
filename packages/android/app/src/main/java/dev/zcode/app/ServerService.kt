@@ -76,8 +76,26 @@ class ServerService : Service() {
 
             // 2. 启动 Node 进程
             val runtimeDir = RuntimeInstaller.getRuntimeDir(this@ServerService)
-            val runnerScript = File(runtimeDir, "zcode/bin/zcode.mjs")
+            val runnerScript1 = File(runtimeDir, "zcode/bin/zcode.mjs")
+            val runnerScript2 = File(runtimeDir, "bin/zcode.mjs")
+            val runnerScript = if (runnerScript1.exists()) runnerScript1 else runnerScript2
             val nodeBinary = RuntimeInstaller.getNodeExecutable(this@ServerService)
+
+            if (!nodeBinary.exists()) {
+                val errMsg = "未找到可执行 Node.js 执行引擎 (路径: ${nodeBinary.absolutePath})"
+                Log.e(TAG, errMsg)
+                onStatusUpdate(errMsg)
+                return@launch
+            }
+
+            if (!runnerScript.exists()) {
+                val errMsg = "未找到 ZCode 服务启动脚本 (路径: ${runnerScript.absolutePath})"
+                Log.e(TAG, errMsg)
+                onStatusUpdate(errMsg)
+                return@launch
+            }
+
+            Log.i(TAG, "Spawning node: ${nodeBinary.absolutePath} ${runnerScript.absolutePath}")
 
             val pb = ProcessBuilder(
                 nodeBinary.absolutePath,
@@ -90,11 +108,17 @@ class ServerService : Service() {
 
             pb.directory(runtimeDir)
             val env = pb.environment()
+            val nativeLibDir = applicationInfo.nativeLibraryDir
+            val fallbackLibDir = RuntimeInstaller.getFallbackLibDir(this@ServerService).absolutePath
+            val ldPath = "$nativeLibDir:$fallbackLibDir:${File(runtimeDir, "usr/lib").absolutePath}"
+            env["LD_LIBRARY_PATH"] = "$ldPath:${env["LD_LIBRARY_PATH"] ?: ""}"
             env["ZCODE_PRODUCT_FLAVOR"] = "zcode-x"
             env["ZCODE_DATA_BASE_DIR"] = File(filesDir, ".zcode-x").absolutePath
             env["HOME"] = filesDir.absolutePath
+            env["TMPDIR"] = cacheDir.absolutePath
             env["PORT"] = "3030"
-            env["PATH"] = "${File(runtimeDir, "bin").absolutePath}:${env["PATH"] ?: "/system/bin"}"
+            val binPath = "$nativeLibDir:$fallbackLibDir:${File(runtimeDir, "zcode/bin").absolutePath}:${File(runtimeDir, "bin").absolutePath}"
+            env["PATH"] = "$binPath:${env["PATH"] ?: "/system/bin"}"
 
             try {
                 nodeProcess = pb.start()

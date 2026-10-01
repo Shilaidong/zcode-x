@@ -34,6 +34,14 @@ android {
         abortOnError = false
         checkReleaseBuilds = false
     }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+    androidResources {
+        noCompress += listOf("gz", "tgz", "tar.gz", "bundle")
+    }
 }
 
 dependencies {
@@ -42,4 +50,5 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.webkit:webkit:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.apache.commons:commons-compress:1.26.1")
 }
