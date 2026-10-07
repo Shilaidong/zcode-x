@@ -110,7 +110,7 @@ class ServerService : Service() {
             val env = pb.environment()
             val nativeLibDir = applicationInfo.nativeLibraryDir
             val fallbackLibDir = RuntimeInstaller.getFallbackLibDir(this@ServerService).absolutePath
-            val ldPath = "$nativeLibDir:$fallbackLibDir:${File(runtimeDir, "usr/lib").absolutePath}"
+            val ldPath = "$nativeLibDir:$fallbackLibDir:${File(runtimeDir, "usr/lib").absolutePath}:${File(runtimeDir, "zcode/usr/lib").absolutePath}"
             env["LD_LIBRARY_PATH"] = "$ldPath:${env["LD_LIBRARY_PATH"] ?: ""}"
             env["ZCODE_PRODUCT_FLAVOR"] = "zcode-x"
             env["ZCODE_DATA_BASE_DIR"] = File(filesDir, ".zcode-x").absolutePath
@@ -126,8 +126,8 @@ class ServerService : Service() {
 
                 // 3. 轮询健康检测，直到服务端返回 200
                 var attempts = 0
-                while (isActive && attempts < 30) {
-                    delay(500)
+                while (isActive && attempts < 90) {
+                    delay(1000)
                     attempts++
                     if (checkHealth()) {
                         isServerReady = true
