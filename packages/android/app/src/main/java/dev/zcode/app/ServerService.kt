@@ -119,6 +119,14 @@ class ServerService : Service() {
             env["PORT"] = "3030"
             val binPath = "$nativeLibDir:$fallbackLibDir:${File(runtimeDir, "zcode/bin").absolutePath}:${File(runtimeDir, "bin").absolutePath}"
             env["PATH"] = "$binPath:${env["PATH"] ?: "/system/bin"}"
+            // Android 没有 /bin/sh，也没有 bash/zsh。ZCode 的 Bash 工具 shell 解析器
+            // (resolvePosixBashShell) 只接受 basename 含 bash/zsh 的候选，且固定回退目录
+            // (/bin:/usr/bin:...) 在本平台均不存在；探测失败后落到 legacy spawn
+            // (shell:true)，而捆绑 Node 构建在该路径上的默认解释器不可用。
+            // 显式声明系统 shell，并在 PATH 内的 runtime/bin 放置 bash/zsh 别名，
+            // 使解析器命中 posix 分支并统一走 /system/bin/sh (toybox)。
+            env["SHELL"] = "/system/bin/sh"
+            ensurePosixShellAliases(runtimeDir)
 
             try {
                 nodeProcess = pb.start()
@@ -154,6 +162,31 @@ class ServerService : Service() {
             conn.responseCode == 200
         } catch (_: Exception) {
             false
+        }
+    }
+
+    /**
+     * 在 PATH 覆盖的 runtime/bin 下创建 bash/zsh 符号链接指向 /system/bin/sh。
+     * ZCode 的 shell 解析器按 PATH+bash/zsh 搜索候选并要求可执行，命中后
+     * Bash 工具即走 posix 分支正常 spawn（Android 系统无 bash/zsh，也没有 /bin/sh）。
+     */
+    private fun ensurePosixShellAliases(runtimeDir: File) {
+        val systemSh = "/system/bin/sh"
+        if (!File(systemSh).canExecute()) {
+            Log.w(TAG, "ensurePosixShellAliases: $systemSh not executable, skipped")
+            return
+        }
+        val binDir = File(runtimeDir, "bin").apply { mkdirs() }
+        for (alias in listOf("bash", "zsh")) {
+            val link = File(binDir, alias)
+            try {
+                if (!link.exists()) {
+                    android.system.Os.symlink(systemSh, link.absolutePath)
+                    Log.i(TAG, "ensurePosixShellAliases: created ${link.absolutePath} -> $systemSh")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "ensurePosixShellAliases failed for ${link.absolutePath}: ${e.message}")
+            }
         }
     }
 
