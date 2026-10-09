@@ -20,6 +20,8 @@ function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd || root,
     stdio: "inherit",
+    // Windows 下 gradle/tar 等是 .bat/.cmd shim，必须经 shell 解析 PATHEXT 才能找到。
+    shell: process.platform === "win32",
     env: {
       ...process.env,
       ANDROID_HOME: process.env.ANDROID_HOME || "/opt/homebrew/share/android-commandlinetools",

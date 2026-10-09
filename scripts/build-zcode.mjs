@@ -3,7 +3,7 @@ import { loadEndpointEnv } from "./load-endpoint-env.mjs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 
 import {
   copyRuntimeNodeModules,
@@ -103,6 +103,8 @@ function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: root,
     stdio: "inherit",
+    // Windows 下 pnpm/tar 等是 .cmd shim，必须经 shell 解析 PATHEXT 才能找到。
+    shell: process.platform === "win32",
     ...options,
   });
   if (result.error) {
@@ -145,7 +147,9 @@ async function buildOutputs(skipBuild) {
     return;
   }
 
-  run("pnpm", ["--filter", "@zcode/cli...", "build"]);
+  // pnpm 的 `pkg...` 表示"包及其下游"，`...pkg` 才是"包及其依赖链"。
+  // 写成后缀形式只会构建 @zcode/cli 自身，导致其上游 workspace 包（shared/services 等）dist 缺失。
+  run("pnpm", ["--filter", "...@zcode/cli", "--filter", "@zcode/cli", "build"]);
   await rm(resolve(root, "packages", "server", "dist"), {
     force: true,
     recursive: true,
@@ -226,7 +230,12 @@ async function createTarball({ packageParent, releaseDir, tarballName }) {
   await rm(tarball, {
     force: true,
   });
-  run("tar", ["-czf", tarball, "-C", packageParent, packageDirName]);
+  // tar CLI 把 "C:" 盘符前缀当作远程 host:path 解析（Cannot connect to C: 崩溃），
+  // 统一改用 cwd + 相对路径，跨 mac/Linux/Windows 都安全。
+  const relativeTar = relative(packageParent, resolve(releaseDir, tarballName)).replaceAll("\\", "/");
+  run("tar", ["-czf", relativeTar, "-C", ".", packageDirName], {
+    cwd: packageParent,
+  });
   return tarball;
 }
 

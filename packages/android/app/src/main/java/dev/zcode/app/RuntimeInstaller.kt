@@ -43,10 +43,16 @@ object RuntimeInstaller {
             return fallbackNode
         }
 
-        // 3. 检查私有运行时中的 bin/node
+        // 3. 检查私有运行时中的 bin/node（根布局）
         val bundledNode = File(getRuntimeDir(context), "bin/node")
         if (bundledNode.exists() && bundledNode.canExecute()) {
             return bundledNode
+        }
+
+        // 3.5 桌面发行版布局：runtime/zcode/bin/node（tar 包顶层带 zcode/ 前缀）
+        val bundledNode2 = File(getRuntimeDir(context), "zcode/bin/node")
+        if (bundledNode2.exists() && bundledNode2.canExecute()) {
+            return bundledNode2
         }
 
         // 4. 检查外部 Termux node
@@ -83,6 +89,8 @@ object RuntimeInstaller {
         // 第二步：尝试从 APK 内置 assets 复制并解压核心静态资源
         try {
             val assetList = context.assets.list("") ?: emptyArray()
+            // AAPT2 会把 .gz 资产 gunzip 后以去掉 .gz 后缀的名字入包（assets.list 看到 "zcode-runtime.tar"），
+            // 且 AssetManager.open 读取该条目时自动 gunzip 返回纯 tar 流——故按前缀匹配即可。
             val assetName = assetList.firstOrNull { it.startsWith("zcode-runtime") }
             if (assetName != null) {
                 onProgress("正在从安装包释放核心静态资源...")
