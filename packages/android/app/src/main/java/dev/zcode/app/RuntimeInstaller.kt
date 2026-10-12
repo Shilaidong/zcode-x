@@ -1,6 +1,7 @@
 package dev.zcode.app
 
 import android.content.Context
+import android.os.StatFs
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -68,13 +69,37 @@ object RuntimeInstaller {
         val runtimeDir = getRuntimeDir(context)
         val runnerScript1 = File(runtimeDir, "zcode/bin/zcode.mjs")
         val runnerScript2 = File(runtimeDir, "bin/zcode.mjs")
-        return runnerScript1.exists() || runnerScript2.exists()
+        val node1 = File(runtimeDir, "zcode/bin/node")
+        val node2 = File(runtimeDir, "bin/node")
+        val marker = File(runtimeDir, "VERSION")
+        // 三条件齐备才算装好：node 可执行、启动脚本在、VERSION 标记存在（标记最后写入，
+        // 缺失即解压未完成）。半成品一律清空重解压，否则首启被杀后二次启动会误判已安装。
+        val complete = marker.exists() &&
+            (node1.exists() || node2.exists()) &&
+            (runnerScript1.exists() || runnerScript2.exists())
+        if (!complete && runtimeDir.exists()) {
+            Log.w(TAG, "Runtime incomplete, removing for re-extract")
+            runtimeDir.deleteRecursively()
+        }
+        return complete
     }
 
     suspend fun ensureRuntime(
         context: Context,
         onProgress: (String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
+        // 磁盘预检：解压峰值约需 1.2GB（521MB 包 + 解压产物）。存储不足时报明确文案，
+        // 而不是静默转圈。
+        runCatching {
+            val stats = StatFs(context.filesDir.absolutePath)
+            (stats.availableBytes / 1024L / 1024L).toLong()
+        }.getOrNull()?.let { freeMb ->
+            if (freeMb < 1200L) {
+                onProgress("磁盘空间不足：解压约需 1.2GB，当前仅剩 ${freeMb}MB")
+                return@withContext false
+            }
+        }
+
         // 第一步：确保 Node.js 原生底层执行引擎就绪
         ensureNativeLibraries(context, onProgress)
 
@@ -98,10 +123,12 @@ object RuntimeInstaller {
                     extractArchive(input, runtimeDir)
                 }
                 makeExecutable(runtimeDir)
+                writeVersionMarker(runtimeDir)
                 return@withContext true
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to extract from assets, falling back to download", e)
+            onProgress("安装包内解压失败(${e.message})，尝试在线下载...")
         }
 
         // 第三步：若 assets 中未内嵌完整资源包，则从 GitHub Releases 在线下载
@@ -119,6 +146,7 @@ object RuntimeInstaller {
             }
             tempArchive.delete()
             makeExecutable(runtimeDir)
+            writeVersionMarker(runtimeDir)
             return@withContext true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to download runtime", e)
@@ -185,6 +213,15 @@ object RuntimeInstaller {
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to set executable flags", e)
+        }
+    }
+
+    /** 解压全部完成且可执行位就绪后写入，作为「完整安装」的唯一权威标记（见 isRuntimeInstalled） */
+    private fun writeVersionMarker(runtimeDir: File) {
+        try {
+            File(runtimeDir, "VERSION").writeText("zcode-runtime-v3.14.4-x\n")
+        } catch (e: Exception) {
+            Log.w(TAG, "writeVersionMarker failed: ${e.message}")
         }
     }
 

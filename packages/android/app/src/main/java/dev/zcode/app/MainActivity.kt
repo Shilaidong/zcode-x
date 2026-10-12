@@ -8,7 +8,9 @@ import android.content.ServiceConnection
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.View
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -33,6 +35,7 @@ class MainActivity : AppCompatActivity() {
     private var serverService: ServerService? = null
     private var isBound = false
     private var lastBackPressTime = 0L
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -59,6 +62,11 @@ class MainActivity : AppCompatActivity() {
         override fun onServiceDisconnected(name: ComponentName?) {
             serverService = null
             isBound = false
+            // 国产 ROM 高杀后台时会先踢掉 service：自动重绑，而不是永远转圈
+            runOnUiThread { tvLoadingDetails.text = "服务已断开，正在自动重连..." }
+            mainHandler.postDelayed({
+                if (!isBound && !isFinishing) startAndBindService()
+            }, 1500)
         }
     }
 
@@ -150,6 +158,16 @@ class MainActivity : AppCompatActivity() {
             startService(serviceIntent)
         }
         bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
+
+        // 绑不上（ROM 后台限制 startForegroundService / service 被拒）时给出可见错误
+        // 与指引，而不是无限转圈。
+        mainHandler.postDelayed({
+            if (!isBound && serverService == null) {
+                tvLoadingStatus.text = "服务启动失败"
+                tvLoadingDetails.text = "无法连接后台服务。请在系统设置中允许 Zcode-x 后台运行/自启动后重试"
+                loadingLayout.visibility = View.VISIBLE
+            }
+        }, 15000)
     }
 
     private fun setupBackNavigation() {
