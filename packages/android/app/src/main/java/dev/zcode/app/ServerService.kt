@@ -35,6 +35,8 @@ class ServerService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var isServerReady = false
     @Volatile private var starting = false
+    @Volatile private var killedByUs = false
+    @Volatile private var lastStatusSink: ((String) -> Unit)? = null
     private var readyListener: ((Boolean) -> Unit)? = null
 
     inner class LocalBinder : Binder() {
@@ -58,6 +60,8 @@ class ServerService : Service() {
 
     @Synchronized
     fun startServer(onStatusUpdate: (String) -> Unit) {
+        killedByUs = false
+        lastStatusSink = onStatusUpdate
         if (isServerReady) {
             readyListener?.invoke(true)
             return
@@ -162,18 +166,25 @@ class ServerService : Service() {
             // 捕获 node 在服务就绪前就挂掉的场景：UI 只转圈没有任何提示，
             // 退出码是这类故障唯一可见信号（spawn 成功但 exec 后崩溃/被杀）。
             launch {
-                    try {
-                        val code = proc.waitFor()
-                        if (!isServerReady) {
-                            Log.e(TAG, "Node process died before server ready, exitCode=$code")
-                            onStatusUpdate("服务进程异常退出(code=$code)")
-                        } else {
-                            Log.i(TAG, "Node process exited after ready, exitCode=$code")
+                try {
+                    val code = proc.waitFor()
+                    if (!isServerReady) {
+                        val hint = when (code) {
+                            137, 9 -> "；疑似被系统后台管控杀死，请在系统设置中允许 Zcode-x 后台运行/自启动"
+                            139, 134 -> "；疑似设备 16KB 页内核与运行时不兼容（SIGSEGV/ABRT）"
+                            127 -> "；执行环境异常（command not found）"
+                            else -> ""
                         }
-                    } catch (e: InterruptedException) {
-                        Log.w(TAG, "waitFor interrupted", e)
+                        Log.e(TAG, "Node process died before server ready, exitCode=$code")
+                        onStatusUpdate("服务进程异常退出(code=$code)$hint，正在自动重试...")
+                        scheduleRestart(attempts = 2)
+                    } else {
+                        Log.i(TAG, "Node process exited after ready, exitCode=$code")
                     }
+                } catch (e: InterruptedException) {
+                    Log.w(TAG, "waitFor interrupted", e)
                 }
+            }
 
                 // 3. 轮询健康检测，直到服务端返回 200
                 var attempts = 0
@@ -249,6 +260,29 @@ class ServerService : Service() {
             }
         } catch (e: Exception) {
             Log.w(TAG, "killLeftoverRuntimes scan failed: ${e.message}")
+        }
+    }
+
+    /**
+     * node 在就绪前挂掉时做有限次自动重启（出院 ROM 杀进程场景）；同时等外层启动
+     * 协程把 starting 复位后再重试，避免互斥误判。用户主动停止（killedByUs）不重启。
+     */
+    private fun scheduleRestart(attempts: Int) {
+        if (attempts <= 0 || isServerReady || killedByUs) return
+        val sink: ((String) -> Unit)? = lastStatusSink
+        serviceScope.launch {
+            try {
+                delay(4000)
+                var waited = 0
+                while (starting && waited < 120) {
+                    delay(1000)
+                    waited++
+                }
+                if (isServerReady || killedByUs) return@launch
+                Log.w(TAG, "Auto-restarting node (attempts left=$attempts)")
+                startServer(sink ?: { msg -> Log.i(TAG, msg); Unit })
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -359,6 +393,7 @@ class ServerService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        killedByUs = true
         serviceScope.cancel()
         // ROM 强杀不走这里，但正常停止/显式重启时要确保 node 与 3030 一并释放
         nodeProcess?.destroy()
