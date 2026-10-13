@@ -31,6 +31,6 @@ class AndroidBridge(private val context: Context, private val onRestartRequested
 
     @JavascriptInterface
     fun getVersion(): String {
-        return "3.14.3"
+        return BuildConfig.VERSION_NAME
     }
 }

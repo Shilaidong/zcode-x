@@ -34,6 +34,9 @@ class ServerService : Service() {
     private var nodeProcess: Process? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var isServerReady = false
+    @Volatile private var starting = false
+    @Volatile private var killedByUs = false
+    @Volatile private var lastStatusSink: ((String) -> Unit)? = null
     private var readyListener: ((Boolean) -> Unit)? = null
 
     inner class LocalBinder : Binder() {
@@ -55,22 +58,39 @@ class ServerService : Service() {
         }
     }
 
+    @Synchronized
     fun startServer(onStatusUpdate: (String) -> Unit) {
+        killedByUs = false
+        lastStatusSink = onStatusUpdate
+        if (isServerReady) {
+            readyListener?.invoke(true)
+            return
+        }
+        if (starting) {
+            onStatusUpdate("服务启动中...")
+            return
+        }
+        starting = true
         serviceScope.launch {
-            if (isServerReady) {
-                withContext(Dispatchers.Main) { readyListener?.invoke(true) }
-                return@launch
-            }
+            try {
+                if (isServerReady) {
+                    withContext(Dispatchers.Main) { readyListener?.invoke(true) }
+                    return@launch
+                }
 
-            // 1. 确保运行时就绪
-            val runtimeOk = RuntimeInstaller.ensureRuntime(this@ServerService) { msg ->
-                onStatusUpdate(msg)
-            }
+                // 1. 确保运行时就绪
+                val runtimeOk = RuntimeInstaller.ensureRuntime(this@ServerService) { msg ->
+                    onStatusUpdate(msg)
+                }
 
-            if (!runtimeOk) {
-                onStatusUpdate("运行时准备失败，无法启动服务")
-                return@launch
-            }
+                if (!runtimeOk) {
+                    onStatusUpdate("运行时准备失败，无法启动服务")
+                    return@launch
+                }
+
+                // 上轮进程被 ROM 强杀（onDestroy 不执行）时，老 node 可能残留占着 3030，
+                // 这会导致健康检查永远失败、UI 永远转圈。spawn 前按同 uid 清理残留。
+                killLeftoverRuntimes(runtimeDir = RuntimeInstaller.getRuntimeDir(this@ServerService))
 
             onStatusUpdate("正在启动 Zcode-x 服务进程...")
 
@@ -95,6 +115,18 @@ class ServerService : Service() {
                 return@launch
             }
 
+            // 设备指纹与内核页大小（一行为后续真机日志定位提供基线；
+            // MagicOS/部分新机型用 16KB 页内核，旧 4KB 对齐的 ELF 会在 execve 处直接失败）
+            val pageSize = try {
+                android.system.Os.sysconf(android.system.OsConstants._SC_PAGESIZE)
+            } catch (e: Exception) {
+                -1L
+            }
+            Log.i(
+                TAG,
+                "Device fingerprint: model=${Build.MODEL} brand=${Build.BRAND} sdk=${Build.VERSION.SDK_INT} " +
+                    "abis=${Build.SUPPORTED_ABIS?.joinToString(",")} pageSize=$pageSize"
+            )
             Log.i(TAG, "Spawning node: ${nodeBinary.absolutePath} ${runnerScript.absolutePath}")
 
             val pb = ProcessBuilder(
@@ -128,9 +160,31 @@ class ServerService : Service() {
             env["SHELL"] = "/system/bin/sh"
             ensurePosixShellAliases(runtimeDir)
 
-            try {
-                nodeProcess = pb.start()
-                startProcessLogDrain(nodeProcess!!)
+            val proc = pb.start()
+            nodeProcess = proc
+            startProcessLogDrain(proc)
+            // 捕获 node 在服务就绪前就挂掉的场景：UI 只转圈没有任何提示，
+            // 退出码是这类故障唯一可见信号（spawn 成功但 exec 后崩溃/被杀）。
+            launch {
+                try {
+                    val code = proc.waitFor()
+                    if (!isServerReady) {
+                        val hint = when (code) {
+                            137, 9 -> "；疑似被系统后台管控杀死，请在系统设置中允许 Zcode-x 后台运行/自启动"
+                            139, 134 -> "；疑似设备 16KB 页内核与运行时不兼容（SIGSEGV/ABRT）"
+                            127 -> "；执行环境异常（command not found）"
+                            else -> ""
+                        }
+                        Log.e(TAG, "Node process died before server ready, exitCode=$code")
+                        onStatusUpdate("服务进程异常退出(code=$code)$hint，正在自动重试...")
+                        scheduleRestart(attempts = 2)
+                    } else {
+                        Log.i(TAG, "Node process exited after ready, exitCode=$code")
+                    }
+                } catch (e: InterruptedException) {
+                    Log.w(TAG, "waitFor interrupted", e)
+                }
+            }
 
                 // 3. 轮询健康检测，直到服务端返回 200
                 var attempts = 0
@@ -139,6 +193,7 @@ class ServerService : Service() {
                     attempts++
                     if (checkHealth()) {
                         isServerReady = true
+                        releaseWakeLockIfHeld()
                         Log.i(TAG, "Zcode-x HTTP/WS server is now ready!")
                         withContext(Dispatchers.Main) {
                             readyListener?.invoke(true)
@@ -146,9 +201,16 @@ class ServerService : Service() {
                         break
                     }
                 }
+                if (!isServerReady) {
+                    val msg = "服务启动超时（90 秒内无响应），设备 ${Build.MODEL} 页大小 $pageSize"
+                    Log.e(TAG, msg)
+                    onStatusUpdate(msg)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to spawn node server process", e)
                 onStatusUpdate("服务启动异常: ${e.message}")
+            } finally {
+                starting = false
             }
         }
     }
@@ -162,6 +224,65 @@ class ServerService : Service() {
             conn.responseCode == 200
         } catch (_: Exception) {
             false
+        }
+    }
+
+    /**
+     * 清理上次运行残留的同 uid node 进程（zcode.mjs / entry-http.js 属于本应用运行时）。
+     * ROM 强杀应用时 onDestroy 不一定会执行，残留 node 会继续占住 3030，导致应用重启后
+     * 健康检查永远失败、UI 永远转圈。spawn 前精确按「cmdline 同时含本包名路径与
+     * zcode.mjs/entry-http.js」匹配，只动自己的残留，读不到 /proc 的进程直接跳过。
+     */
+    private fun killLeftoverRuntimes(runtimeDir: File) {
+        val runtimePath = runtimeDir.absolutePath
+        val pkg = applicationContext.packageName
+        if (!runtimePath.contains(pkg)) return // 防御：路径异常时不做任何清理
+        try {
+            File("/proc").listFiles()?.forEach { pidDir ->
+                val name = pidDir.name
+                if (name.isEmpty() || !name.all { it.isDigit() }) return@forEach
+                val pid = name.toIntOrNull() ?: return@forEach
+                if (pid == android.os.Process.myPid()) return@forEach
+                val cmdline = try {
+                    File(pidDir, "cmdline").readBytes().toString(Charsets.UTF_8).replace('\u0000', ' ')
+                } catch (_: Exception) {
+                    return@forEach
+                }
+                if (!cmdline.contains(runtimePath)) return@forEach
+                if (cmdline.contains("zcode.mjs") || cmdline.contains("entry-http.js")) {
+                    Log.i(TAG, "Killing leftover runtime pid=$pid cmd=${cmdline.take(120)}")
+                    try {
+                        android.os.Process.killProcess(pid)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "kill leftover $pid failed: ${e.message}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "killLeftoverRuntimes scan failed: ${e.message}")
+        }
+    }
+
+    /**
+     * node 在就绪前挂掉时做有限次自动重启（出院 ROM 杀进程场景）；同时等外层启动
+     * 协程把 starting 复位后再重试，避免互斥误判。用户主动停止（killedByUs）不重启。
+     */
+    private fun scheduleRestart(attempts: Int) {
+        if (attempts <= 0 || isServerReady || killedByUs) return
+        val sink: ((String) -> Unit)? = lastStatusSink
+        serviceScope.launch {
+            try {
+                delay(4000)
+                var waited = 0
+                while (starting && waited < 120) {
+                    delay(1000)
+                    waited++
+                }
+                if (isServerReady || killedByUs) return@launch
+                Log.w(TAG, "Auto-restarting node (attempts left=$attempts)")
+                startServer(sink ?: { msg -> Log.i(TAG, msg); Unit })
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -217,7 +338,13 @@ class ServerService : Service() {
     private fun acquireWakeLock() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ZcodeX::ServerWakeLock").apply {
-            acquire(10 * 60 * 1000L) // 初始保护 10 分钟
+            acquire(2 * 60 * 1000L) // 仅启动窗口持有；就绪后由 releaseWakeLock 释放
+        }
+    }
+
+    private fun releaseWakeLockIfHeld() {
+        if (wakeLock?.isHeld == true) {
+            wakeLock?.release()
         }
     }
 
@@ -238,6 +365,12 @@ class ServerService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification = buildForegroundNotification()
         startForeground(NOTIFICATION_ID, notification)
+        // START_STICKY 复活路径（intent==null）：系统/ROM 杀进程后用 sticky 重建了
+        // service，但 node 不会自动拉起，应用只会在转圈页死等。这里主动恢复启动。
+        if (intent == null && !isServerReady && nodeProcess?.isAlive != true) {
+            Log.i(TAG, "onStartCommand restarted by system (sticky), resuming server")
+            startServer { msg -> Log.i(TAG, "resume status: $msg") }
+        }
         return START_STICKY
     }
 
@@ -260,11 +393,12 @@ class ServerService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        killedByUs = true
         serviceScope.cancel()
+        // ROM 强杀不走这里，但正常停止/显式重启时要确保 node 与 3030 一并释放
         nodeProcess?.destroy()
-        if (wakeLock?.isHeld == true) {
-            wakeLock?.release()
-        }
+        nodeProcess?.destroyForcibly()
+        releaseWakeLockIfHeld()
         Log.i(TAG, "ServerService destroyed and process stopped")
     }
 
