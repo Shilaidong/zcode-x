@@ -11,10 +11,14 @@ android {
         applicationId = "dev.zcode.app.x"
         minSdk = 26
         targetSdk = 28
-        versionCode = 1
-        versionName = "3.14.3"
+        versionCode = 2
+        versionName = "3.14.5-h1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {
